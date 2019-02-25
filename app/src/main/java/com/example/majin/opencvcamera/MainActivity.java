@@ -56,14 +56,14 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private CameraBridgeViewBase mCVCamera;
 
     //以下为参数定义
-    private int YOffset,SubMatHight,OpenMin,OpenMax,CloseMin,CloseMax;
+    private int YOffset,SubMatHight,OpenMin,OpenMax,CloseMin,CloseMax,FrameOut;
 
     //以下全局变量
     private Mat mRgba,SubL,SubR;
     private int swid,shei,nLR,nClose;
     private int[][] LR= {{0,0,0},{0,0,0}};
 
-    private int nFrmNum,nFrmSync;
+    private int nFrmNum,nFrmSync,CloseFrame;
     private boolean runflag,ifClosed;
 
     //以下IO类及变量
@@ -153,6 +153,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         OpenMax = 100;
         CloseMin = -5;
         CloseMax = -100;
+        FrameOut = 50;
         
         mRgba = new Mat(shei, swid, CvType.CV_8UC4); //原始RGBA四通道图像（携带Alpha透明度信息的PNG图像）
         SubL = new Mat();
@@ -160,6 +161,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         nLR = 1;
         nClose = 0;
         nFrmSync = 0;//初始化帧数计数器及同步计数器
+        CloseFrame = 0;
         runflag = true;
         ifClosed = true;
     }
@@ -236,7 +238,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         SubA.release();
         SubB.release();
     }
-    private boolean Analy(){
+    private boolean Analy(int NowFrame){
         boolean result = ifClosed;
         int LO,RO,LS,RS;
         LS = (LR[0][nLR%3]-LR[0][(nLR-2)%3])/2;
@@ -246,6 +248,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
             result = false;
         }
         else if(LS<CloseMin&&LS>CloseMax&&RS<CloseMin&&RS>CloseMax){
+            CloseFrame = NowFrame;
             nClose++;
         }
         if(nClose>2){
@@ -256,7 +259,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                 result = true;
             }
         }
-
+        if(nClose>0&&(NowFrame - CloseFrame)>FrameOut) nClose = 0;      //超时 关门中状态失效，nClose清零
         return result;
     }
 
@@ -267,7 +270,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                     Thread.sleep(1);
                 }
                 CompareFrame(mRgba);
-                if(Analy()^ifClosed){    //计算当前位置速度，判定是否与全局状态变量一致
+                if(Analy(nFrmNum)^ifClosed){    //计算当前位置速度，判定是否与全局状态变量一致
                     ifClosed = !ifClosed;           //不一致则切换全局状态变量
                     SwitchLight(ifClosed);          //并将状态传递给光机
                 }
