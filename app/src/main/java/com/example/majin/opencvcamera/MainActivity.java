@@ -322,7 +322,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                     switch (NowState){
                         case 0:             //初始化状态
                             if(TotalDiff==0){           //检测到第一次静止
-                                LogStr = String.format(Locale.CHINA, "首次静止");
+                                LogStr = String.format(Locale.CHINA, "首次静止0-1");
                                 FileLogs.i(logtag,LogStr);
                                 DiffCount = 0;
                                 NowState = 1;
@@ -332,80 +332,179 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                             }
                             mRgba.copyTo(mLast);
                             break;
-                        case 1:             //首次静止状态
+                        case 1:             //首次静止状态   这里没有考虑到一直静止！！！！！！！！！！！！！！
                             if(speedflag&&Lwidth>0&&Rwidth>0){          //检测到关门运动
-                                LogStr = String.format(Locale.CHINA, "关门运动");
+                                LogStr = String.format(Locale.CHINA, "关门运动1-2");
                                 FileLogs.i(logtag,LogStr);
+                                DiffCount = 0;
                                 NowState = 2;
                             }
                             else if(LtoR==0){               //未检测到关门运动，但是中间区域已经全部变化，可推测为开门或者干扰
-                                LogStr = String.format(Locale.CHINA, "非关门运动，开门或者干扰");
+                                LogStr = String.format(Locale.CHINA, "非关门运动，开门或者干扰1-3");
                                 FileLogs.i(logtag,LogStr);
+                                DiffCount = 0;
+                                nGetPoint = 0;
                                 NowState = 3;
                             }
                             else{                           //未检测到关门运动，中间区域尚未变化，但非中间区域有变化，有干扰，累计帧数
-                                DiffCount++;
+                                DiffCount++;//这里没有考虑到一直静止！！！！！！！！！！！！！！！！！！！！！
                             }
                             if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                LogStr = String.format(Locale.CHINA, "有干扰，重置状态到初始");
+                                LogStr = String.format(Locale.CHINA, "首次静态有干扰，重置状态到初始1-0");
                                 FileLogs.i(logtag,LogStr);
+                                mRgba.copyTo(mLast);
+                                DiffCount = 0;
                                 NowState = 0;
                             }
                             break;
                         case 2:             //关门状态中
                             if(LtoR==0){                    //门已经关闭
-                                LogStr = String.format(Locale.CHINA, "门已经关闭");
+                                LogStr = String.format(Locale.CHINA, "门已经关闭2-4");
                                 FileLogs.i(logtag,LogStr);
+                                mRgba.copyTo(mLast);
+                                DiffCount = 0;
+                                nGetPoint = 0;
                                 NowState = 4;
                             }
                             else if(LtoR==swid){            //门又打开了
-                                LogStr = String.format(Locale.CHINA, "门在关闭途中打开");
+                                LogStr = String.format(Locale.CHINA, "门在关闭途中打开2-5");
                                 FileLogs.i(logtag,LogStr);
                                 mRgba.copyTo(mLast);
+                                DiffCount = 0;
                                 NowState = 5;
                             }
                             else{                           //未检测到完全关门，也未检测到门重新打开，累计帧数
                                 DiffCount++;
                             }
                             if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                LogStr = String.format(Locale.CHINA, "有干扰，重置状态到初始");
+                                LogStr = String.format(Locale.CHINA, "关门中有干扰，重置状态到初始2-0");
                                 FileLogs.i(logtag,LogStr);
+                                mRgba.copyTo(mLast);
+                                DiffCount = 0;
                                 NowState = 0;
                             }
                             break;
-                        case 3:
+                        case 3:             //开门状态中
                             if(ifclose) {
                                 if (ComparePoint(mRgba, mLast) == 15) {
-                                    LogStr = String.format(Locale.CHINA, "静态点全变，门打开");
+                                    LogStr = String.format(Locale.CHINA, "静态点全变，门打开3-5");
                                     FileLogs.i(logtag, LogStr);
                                     mRgba.copyTo(mLast);
-                                    NowState = 4;
+                                    DiffCount = 0;
+                                    NowState = 5;
                                 }
                             }
                             else if(AreaVar==0&&TotalArea>SubMatHight*swid/SideValue){
-                                LogStr = String.format(Locale.CHINA, "变域面积稳定且大于SideValue，门打开");
+                                LogStr = String.format(Locale.CHINA, "变域面积稳定且大于SideValue，门打开3-5");
                                 FileLogs.i(logtag,LogStr);
                                 mRgba.copyTo(mLast);
-                                NowState = 4;
+                                DiffCount = 0;
+                                NowState = 5;
                             }
                             else if(LtoR==swid){            //门在打开过程中又关闭了
-                                LogStr = String.format(Locale.CHINA, "门在打开途中关闭");
+                                LogStr = String.format(Locale.CHINA, "门在打开途中关闭3-4");
                                 FileLogs.i(logtag,LogStr);
                                 mRgba.copyTo(mLast);
+                                DiffCount = 0;
+                                nGetPoint = 0;
                                 NowState = 4;
                             }
                             else{                           //未检测到完全关门，也未检测到门重新打开，累计帧数
+                                if ((ComparePoint(mRgba, mLast)&9) == 0){
+                                    nGetPoint++;
+                                }
                                 DiffCount++;
                             }
                             if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                LogStr = String.format(Locale.CHINA, "有干扰，重置状态到初始");
-                                FileLogs.i(logtag,LogStr);
-                                NowState = 0;
+                                if(ifclose) {
+                                    if (DiffCount - nGetPoint<FrameNum/2) {            //按位与1001 得到0000，两个side点均匹配
+                                        LogStr = String.format(Locale.CHINA, "判定开门动作依然检测到Side静参点未改变，判定当前门未开3-4");
+                                        FileLogs.i(logtag, LogStr);
+                                        mRgba.copyTo(mLast);
+                                        DiffCount = 0;
+                                        NowState = 4;
+                                    }
+                                    else {
+                                        LogStr = String.format(Locale.CHINA, "开门动作判定后有干扰，重置状态到初始");
+                                        FileLogs.i(logtag, LogStr);
+                                        mRgba.copyTo(mLast);
+                                        DiffCount = 0;
+                                        NowState = 0;
+                                    }
+                                }
+                                else {
+                                    LogStr = String.format(Locale.CHINA, "基准检测被干扰，重置状态到初始");
+                                    FileLogs.i(logtag, LogStr);
+                                    mRgba.copyTo(mLast);
+                                    DiffCount = 0;
+                                    NowState = 0;
+                                }
                             }
                             break;
-                        case 4:
+                        case 4:         //门已关闭
+                            if(TotalDiff==0){               //门关闭后，整个检测区域静态，确认门关闭完全
+                                LogStr = String.format(Locale.CHINA, "门关闭后，整个检测区域静态，确认门关闭完全4-6");
+                                FileLogs.i(logtag,LogStr);
+                                mRgba.copyTo(mLast);
+                                DiffCount = 0;
+                                NowState = 6;
+                            }
+                            else if(LtoR==0){               //检测到中间区域已经全部变化，可推测为开门或者干扰
+                                LogStr = String.format(Locale.CHINA, "关门尚未稳定又开门4-3");
+                                FileLogs.i(logtag,LogStr);
+                                DiffCount = 0;
+                                nGetPoint = 0;
+                                NowState = 3;
+                            }
+                            else{                           //未检测到关门运动，中间区域尚未变化，但非中间区域有变化，有干扰，累计帧数
+                                if((ComparePoint(mRgba, mLast)&9) == 0){
+                                    nGetPoint++;
+                                }
+                                DiffCount++;
+                            }
+                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
+                                if(ifclose) {
+                                    if (DiffCount - nGetPoint<FrameNum/2) {            //按位与1001 得到0000，两个side点均匹配
+                                        LogStr = String.format(Locale.CHINA, "关门后有干扰，但是可以检测到Side静参点4-6");
+                                        FileLogs.i(logtag, LogStr);
+                                        mRgba.copyTo(mLast);
+                                        DiffCount = 0;
+                                        NowState = 6;
+                                    }
+                                    else {
+                                        LogStr = String.format(Locale.CHINA, "关门后有干扰，重置状态到初始");
+                                        FileLogs.i(logtag, LogStr);
+                                        mRgba.copyTo(mLast);
+                                        DiffCount = 0;
+                                        NowState = 0;
+                                    }
+                                }
+                                else {
+                                    LogStr = String.format(Locale.CHINA, "基准检测被干扰，重置状态到初始");
+                                    FileLogs.i(logtag, LogStr);
+                                    mRgba.copyTo(mLast);
+                                    DiffCount = 0;
+                                    NowState = 0;
+                                }
+                            }
                             break;
-                        case 5:
+                        case 5:         //门已打开
+                            if(speedflag&&Lwidth>0&&Rwidth>0){          //检测到关门运动
+                                LogStr = String.format(Locale.CHINA, "关门运动5-2");
+                                FileLogs.i(logtag,LogStr);
+                                DiffCount = 0;
+                                NowState = 2;
+                            }
+                            else{                           //未检测到关门运动，中间区域尚未变化，但非中间区域有变化，有干扰，累计帧数
+                                DiffCount++;
+                            }
+                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
+                                LogStr = String.format(Locale.CHINA, "首次静态有干扰，重置状态到初始1-0");
+                                FileLogs.i(logtag,LogStr);
+                                mRgba.copyTo(mLast);
+                                DiffCount = 0;
+                                NowState = 0;
+                            }
                             break;
                     }
                     nProcNum++;//分离处理及同步避免空帧
@@ -560,7 +659,6 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         mRgba = inputFrame.rgba();//本方法内部不对帧进行重绘则可以省掉复制过程。
         mRgba.copyTo(mFrame);
-        nFrmNum++;
         if(nFrmNum>=(Integer.MAX_VALUE)) nFrmNum = 0;//按每秒30帧算，Integer.MAX_VALUE=2147483647，折合828天半。超过这个运行时间，计数器归零，且不影响循环判断。
         if(!getclose) {
             Imgproc.line(mFrame, new Point(swid / 2, YOffset), new Point(swid / 2, YOffset + SubMatHight), new Scalar(0, 0, 255), 2);
@@ -570,6 +668,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                 Imgproc.line(mFrame, new Point(swid / 2 + RMax - 1, YOffset), new Point(swid / 2 + RMax - 1, YOffset + SubMatHight), new Scalar(0, 255, 0), 1);
             }
         }
+        nFrmNum++;
         return mFrame;//此处必须返回与控件相同分辨率的mat，否则无法显示。
     }
 }
