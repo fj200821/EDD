@@ -46,28 +46,27 @@ import static org.opencv.imgproc.Imgproc.erode;
 import static org.opencv.imgproc.Imgproc.getStructuringElement;
 
 public class MainActivity extends Activity implements CameraBridgeViewBase.CvCameraViewListener2 {
+    //以下全局标识
     private String TAG = "ElevatorDetectorModel";
     private String logtag = "EDDPhone";
-
     private static final String KEY_ACTION = "com.newhaisiwei.keycode";
     private static final String EXTRA_KEY_VALUE = "KeyCode";
+
     //OpenCV的相机接口
     private CameraBridgeViewBase mCVCamera;
-    //缓存相机每帧输入的数据
-    private Mat mRgba,mLast,mOpen,mClose,mFrame,m_diff;
-    private int swid,shei;
 
     //以下为参数定义
-    private int FrameNum,YOffset,SubMatHight;
-    //以上为参数定义
+    private int YOffset,SubMatHight,OpenMin,OpenMax,CloseMin,CloseMax;
 
-    private int nFrmNum,nFrmSync,nProcNum,nGetPoint;
-    private int TotalDiff,TotalArea,AreaVar,NowState,DiffCount;
-    private int Lwidth,Rwidth,LtoR,LSpeed,RSpeed;
-    private int MiddleValue,SideValue,LMax,RMax,VarMin,PointMin,SpeedMin,SpeedMax;
-    private int DiffBuffer[][];
-    private int Points[][][];
-    private boolean runflag,speedflag,getclose,ifclose,lightstatus,iflight;
+    //以下全局变量
+    private Mat mRgba,SubL,SubR;
+    private int swid,shei,nLR,nClose;
+    private int[][] LR= {{0,0,0},{0,0,0}};
+
+    private int nFrmNum,nFrmSync;
+    private boolean runflag,ifClosed;
+
+    //以下IO类及变量
     private LogToFile FileLogs;
     private String LogStr;
     private CommandExecution CmdExec;
@@ -148,374 +147,131 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private void InitPara(){
 
         //UI中配置文件中的参数这里赋值
-        FrameNum = 10;       //采样的帧数，同时会根据此值定义缓存数量。平衡性能和效率的参数。
         YOffset = 2;        //检测区域距离Top的偏移
         SubMatHight = 60;   //检测区域的高度
-
+        OpenMin = 5;
+        OpenMax = 100;
+        CloseMin = -5;
+        CloseMax = -100;
+        
         mRgba = new Mat(shei, swid, CvType.CV_8UC4); //原始RGBA四通道图像（携带Alpha透明度信息的PNG图像）
-        mLast = new Mat();
-        mOpen = new Mat();
-        mClose = new Mat();
-        mFrame = new Mat();
-        m_diff = new Mat();
-        DiffBuffer = new int[FrameNum][6];              //保持之前的运动状态的缓存
-        for(int i=0;i<FrameNum;i++){
-            DiffBuffer[i][0] = 2;                          //变化区块的数量
-            DiffBuffer[i][1] = 0;                          //变化区域的面积
-            DiffBuffer[i][2] = 0;                          //左侧中间未变化的长度
-            DiffBuffer[i][3] = 0;                          //右侧中间未变化的长度
-            DiffBuffer[i][4] = 0;                          //左侧长度的变化速率
-            DiffBuffer[i][5] = 0;                          //右侧长度的变化速率
-        }
-
-        Points = new int[3][2][5];                //每扇门四个极限点,一个极限长，两扇门，三组作为基准对比，误差全小于Pointvar则为准备好。
-        for(int i=0;i<30;i++){
-            Points[i/10][(i/5)%2][i%5] = 0;
-        }
-        TotalDiff = FrameNum*2;
-        TotalArea = 0;
-        AreaVar = 0;
-        MiddleValue = 20;
-        SideValue = 12;
-        VarMin = 50;
-        PointMin = 30;
-        LMax=RMax=swid/2;
-        LSpeed = RSpeed = 0;
-        DiffCount = 0;
-        SpeedMin = 10;
-        SpeedMax = swid/4;
-        nFrmNum = nFrmSync = nGetPoint = 0;//初始化帧数计数器及同步计数器
-        nProcNum = 1;//初始化帧处理计数器
-        NowState = 0;
+        SubL = new Mat();
+        SubR = new Mat();
+        nLR = 1;
+        nClose = 0;
+        nFrmSync = 0;//初始化帧数计数器及同步计数器
         runflag = true;
-        getclose  = false;
-        speedflag = false;
-        ifclose = false;
-        //查询光机状态
+        ifClosed = true;
+    }
+    //切换光机状态，输入的ON_OFF为true时，光机若关闭，则打开，反之亦然。
+    private boolean SwitchLight(boolean ON_OFF){
         CmdResult = CmdExec.execCommand("cat /sys/class/leds/lcd-backlight/brightness",false);
         if(CmdResult.result>=0) {
-            lightstatus = true;
-            if (CmdResult.successMsg == "0") {
-                iflight = false;
-            }
-            else {
-                iflight = true;
-            }
+            if (CmdResult.successMsg.equals("0")^ON_OFF) OnOffScreen();
+            return true;
         }
         else{
-            lightstatus = false;
-            iflight = true;
+            return false;
         }
-        //LSD = Imgproc.createLineSegmentDetector();
     }
-    private  Mat ProcessFrame(Mat MatA, Mat MatB){
-        Mat SubA;
-        Mat SubB;
-        Mat GrayA = new Mat();
-        Mat GrayB = new Mat();
+
+    private int DiffMat(Mat NowSub,Mat LastSub,boolean ifL){
         Mat mDiff = new Mat();
         Mat kernel_erode;
         Mat kernel_dilate;
-
-        SubA = MatA.submat(new Rect(0,YOffset,swid,SubMatHight));
-        SubB = MatB.submat(new Rect(0,YOffset,swid,SubMatHight));
-        Imgproc.cvtColor(SubA,GrayA,COLOR_BGR2GRAY);
-        Imgproc.cvtColor(SubB,GrayB,COLOR_BGR2GRAY);
-        Core.absdiff(GrayA, GrayB, mDiff);
+        int DiffOffset;
+        Core.absdiff(NowSub, LastSub, mDiff);
         Imgproc.threshold(mDiff, mDiff, 50, 255, THRESH_BINARY);
         kernel_erode = getStructuringElement(MORPH_RECT, new Size(3, 3));
         kernel_dilate = getStructuringElement(MORPH_RECT, new Size(15, 15));
         erode(mDiff, mDiff, kernel_erode);
         dilate(mDiff, mDiff, kernel_dilate);
-        SubA.release();
-        SubB.release();
-        GrayA.release();
-        GrayB.release();
         kernel_erode.release();
         kernel_dilate.release();
-        return mDiff;
-    }
-    private int AnalyseDiff(Mat MatDiff,int NowFrame){
         List<MatOfPoint> contours=new ArrayList<>();
-        Imgproc.findContours(MatDiff, contours, new Mat(), RETR_EXTERNAL, CHAIN_APPROX_NONE);
+        Imgproc.findContours(mDiff, contours, new Mat(), RETR_EXTERNAL, CHAIN_APPROX_NONE);
         Rect[] boundRect = new Rect[contours.size()];
-        int NowDiff = 0;
-        int NowArea = 0;
-        Lwidth=Rwidth=swid/2;
+        DiffOffset=swid/2;
         for (int i = 0; i < contours.size(); i++)
         {
             boundRect[i] = boundingRect(contours.get(i));
             if(boundRect[i].height<SubMatHight/2) continue;
-            NowDiff++;                                                                                  //统计多少个不同的块
-            NowArea += boundRect[i].width*boundRect[i].height;
-            if(boundRect[i].x<swid/2){
-                if((boundRect[i].x+boundRect[i].width)>swid/2){
-                    Lwidth = Rwidth = 0;
-                }
-                else{
-                    if(Lwidth > swid/2-boundRect[i].x-boundRect[i].width) Lwidth = swid/2-boundRect[i].x-boundRect[i].width;
-                }
+            if(ifL){
+                if(DiffOffset > swid/2-boundRect[i].x-boundRect[i].width) DiffOffset = swid/2-boundRect[i].x-boundRect[i].width;
             }
             else{
-                if(Rwidth > boundRect[i].x - swid/2) Rwidth = boundRect[i].x - swid/2;
+                if(DiffOffset > boundRect[i].x - swid/2) DiffOffset = boundRect[i].x - swid/2;
             }
         }
-        if(Lwidth==0&&Rwidth==0&&NowDiff==1) NowDiff = 2;
-        TotalDiff = TotalDiff - DiffBuffer[NowFrame%FrameNum][0] + NowDiff; //更新差异块总和（避免for循环资源浪费，采用一减一加）
-        DiffBuffer[NowFrame%FrameNum][0] = NowDiff;                     //更新不同数
+        mDiff.release();
+        return DiffOffset;
+    }
 
-        TotalArea = TotalArea - DiffBuffer[NowFrame%FrameNum][1] + NowArea;//更新差异面积总和（避免for循环资源浪费，采用一减一加）
-        DiffBuffer[NowFrame%FrameNum][1] = NowArea;                     //更新差异面积
-
-        int TotalVar = 0;
-        for(int i=0;i<FrameNum;i++){
-            TotalVar += (DiffBuffer[i][1]-TotalArea/FrameNum)*(DiffBuffer[i][1]-TotalArea/FrameNum);
+    private void CompareFrame(Mat NowMat){
+        Mat SubA;
+        Mat SubB;
+        int LDiff,RDiff;
+        SubA = NowMat.submat(new Rect(0,YOffset,swid/2,SubMatHight));
+        SubB = NowMat.submat(new Rect(swid/2,YOffset,swid/2,SubMatHight));
+        Imgproc.cvtColor(SubA,SubA,COLOR_BGR2GRAY);
+        Imgproc.cvtColor(SubB,SubB,COLOR_BGR2GRAY);
+        LDiff = DiffMat(SubA,SubL,true);
+        RDiff = DiffMat(SubB,SubR,false);
+        if(LDiff<swid/2){
+            LR[0][nLR%3] = LDiff;
+            SubA.copyTo(SubL);
         }
-        AreaVar = (int)Math.sqrt(TotalVar/FrameNum);
-
-        DiffBuffer[NowFrame%FrameNum][2] = Lwidth;                     //更新L无差异距离
-        DiffBuffer[NowFrame%FrameNum][3] = Rwidth;                     //更新R无差异距离
-        if(NowFrame>=2) {
-            LSpeed = (DiffBuffer[(NowFrame - 2) % FrameNum][2] - Lwidth) / 2;
-            RSpeed = (DiffBuffer[(NowFrame - 2) % FrameNum][3] - Rwidth) / 2;
+        else{
+            LR[0][nLR%3] = LR[0][(nLR-1)%3];
         }
-        DiffBuffer[NowFrame%FrameNum][4] = LSpeed;                     //更新L变化速率（前两帧平均）
-        DiffBuffer[NowFrame%FrameNum][5] = RSpeed;                     //更新R变化速率（前两帧平均）
-        if(NowFrame>5){
-            boolean tempflag = true;
-            for(int i=0;i<6;i++) {
-                if(DiffBuffer[(NowFrame-i/2)%FrameNum][4+i%2]<SpeedMin||DiffBuffer[(NowFrame-i/2)%FrameNum][4+i%2]>SpeedMax){
-                    tempflag = false;
-                    break;
-                }
+        if(RDiff<swid/2){
+            LR[1][nLR%3] = RDiff;
+            SubB.copyTo(SubR);
+        }
+        else{
+            LR[1][nLR%3] = LR[0][(nLR-1)%3];
+        }
+        nLR++;
+        if(nLR>=(Integer.MAX_VALUE)) nLR = 1;
+        SubA.release();
+        SubB.release();
+    }
+    private boolean Analy(){
+        boolean result = ifClosed;
+        int LO,RO,LS,RS;
+        LS = (LR[0][nLR%3]-LR[0][(nLR-2)%3])/2;
+        RS = (LR[1][nLR%3]-LR[1][(nLR-2)%3])/2;
+        if(LS>OpenMin&&LS<OpenMax&&RS>OpenMin&&RS<OpenMax){
+            nClose = 0;
+            result = false;
+        }
+        else if(LS<CloseMin&&LS>CloseMax&&RS<CloseMin&&RS>CloseMax){
+            nClose++;
+        }
+        if(nClose>2){
+            LO = LR[0][nLR%3];
+            RO = LR[1][nLR%3];
+            if(LO==0&&RO==0&&LS==0&&RS==0){
+                nClose = 0;
+                result = true;
             }
-            if(speedflag==false&&tempflag==true){           //speedflag即将发生从false到true的变化，代表检测到门刚进入关门状态，记录当前的(实际上是四帧之前)LRMax值
-                LMax = DiffBuffer[(NowFrame-4)%FrameNum][2];
-                RMax = DiffBuffer[(NowFrame-4)%FrameNum][3];
-                ifclose = true;
-            }
-            speedflag = tempflag;//采用临时布尔值覆盖全局标识，避免其他线程检测全局标识时，标识与当前状态不一致。
         }
-        if(LtoR != Lwidth+Rwidth) {
-            LtoR = Lwidth+Rwidth;
-            LogStr = String.format(Locale.CHINA, "Lwidth:%d Rwidth:%d  LSpeed:%d RSpeed:%d", Lwidth, Rwidth, LSpeed,RSpeed);
-            FileLogs.i(logtag, LogStr);
-        }
-        return NowDiff;
+
+        return result;
     }
 
     private void varrun(){
         while(runflag) {
             try {
-                if(nFrmNum>1) {//原始两帧装载完成
-                    while((nFrmSync==nFrmNum)&&runflag){//等待新的帧存入缓冲区
-                        Thread.sleep(1);
-                    }
-                    if(ifclose&&!getclose){
-                        LogStr = getCacheDir().getAbsolutePath() + "/Close.bmp";
-                        Imgcodecs.imwrite(LogStr, mFrame);
-                        FileLogs.i(logtag, LogStr);
-                        getclose = true;
-                    }
-                    m_diff = ProcessFrame(mRgba, mLast);
-                    AnalyseDiff(m_diff,nProcNum);
-                    switch (NowState){
-                        case 0:             //初始化状态
-                            if(TotalDiff==0){           //检测到第一次静止
-                                LogStr = String.format(Locale.CHINA, "首次静止0-1");
-                                FileLogs.i(logtag,LogStr);
-                                DiffCount = 0;
-                                NowState = 1;
-                                LogStr = getCacheDir().getAbsolutePath() + "/Static.bmp";
-                                Imgcodecs.imwrite(LogStr, mFrame);
-                                FileLogs.i(logtag, LogStr);
-                            }
-                            mRgba.copyTo(mLast);
-                            break;
-                        case 1:             //首次静止状态   这里没有考虑到一直静止！！！！！！！！！！！！！！
-                            if(speedflag&&Lwidth>0&&Rwidth>0){          //检测到关门运动
-                                LogStr = String.format(Locale.CHINA, "关门运动1-2");
-                                FileLogs.i(logtag,LogStr);
-                                DiffCount = 0;
-                                NowState = 2;
-                            }
-                            else if(LtoR==0){               //未检测到关门运动，但是中间区域已经全部变化，可推测为开门或者干扰
-                                LogStr = String.format(Locale.CHINA, "非关门运动，开门或者干扰1-3");
-                                FileLogs.i(logtag,LogStr);
-                                DiffCount = 0;
-                                nGetPoint = 0;
-                                NowState = 3;
-                            }
-                            else{                           //未检测到关门运动，中间区域尚未变化，但非中间区域有变化，有干扰，累计帧数
-                                DiffCount++;//这里没有考虑到一直静止！！！！！！！！！！！！！！！！！！！！！
-                            }
-                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                LogStr = String.format(Locale.CHINA, "首次静态有干扰，重置状态到初始1-0");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                NowState = 0;
-                            }
-                            break;
-                        case 2:             //关门状态中
-                            if(LtoR==0){                    //门已经关闭
-                                LogStr = String.format(Locale.CHINA, "门已经关闭2-4");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                nGetPoint = 0;
-                                NowState = 4;
-                            }
-                            else if(LtoR==swid){            //门又打开了
-                                LogStr = String.format(Locale.CHINA, "门在关闭途中打开2-5");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                NowState = 5;
-                            }
-                            else{                           //未检测到完全关门，也未检测到门重新打开，累计帧数
-                                DiffCount++;
-                            }
-                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                LogStr = String.format(Locale.CHINA, "关门中有干扰，重置状态到初始2-0");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                NowState = 0;
-                            }
-                            break;
-                        case 3:             //开门状态中
-                            if(ifclose) {
-                                if (ComparePoint(mRgba, mLast) == 15) {
-                                    LogStr = String.format(Locale.CHINA, "静态点全变，门打开3-5");
-                                    FileLogs.i(logtag, LogStr);
-                                    mRgba.copyTo(mLast);
-                                    DiffCount = 0;
-                                    NowState = 5;
-                                }
-                            }
-                            else if(AreaVar==0&&TotalArea>SubMatHight*swid/SideValue){
-                                LogStr = String.format(Locale.CHINA, "变域面积稳定且大于SideValue，门打开3-5");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                NowState = 5;
-                            }
-                            else if(LtoR==swid){            //门在打开过程中又关闭了
-                                LogStr = String.format(Locale.CHINA, "门在打开途中关闭3-4");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                nGetPoint = 0;
-                                NowState = 4;
-                            }
-                            else{                           //未检测到完全关门，也未检测到门重新打开，累计帧数
-                                if ((ComparePoint(mRgba, mLast)&9) == 0){
-                                    nGetPoint++;
-                                }
-                                DiffCount++;
-                            }
-                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                if(ifclose) {
-                                    if (DiffCount - nGetPoint<FrameNum/2) {            //按位与1001 得到0000，两个side点均匹配
-                                        LogStr = String.format(Locale.CHINA, "判定开门动作依然检测到Side静参点未改变，判定当前门未开3-4");
-                                        FileLogs.i(logtag, LogStr);
-                                        mRgba.copyTo(mLast);
-                                        DiffCount = 0;
-                                        NowState = 4;
-                                    }
-                                    else {
-                                        LogStr = String.format(Locale.CHINA, "开门动作判定后有干扰，重置状态到初始");
-                                        FileLogs.i(logtag, LogStr);
-                                        mRgba.copyTo(mLast);
-                                        DiffCount = 0;
-                                        NowState = 0;
-                                    }
-                                }
-                                else {
-                                    LogStr = String.format(Locale.CHINA, "基准检测被干扰，重置状态到初始");
-                                    FileLogs.i(logtag, LogStr);
-                                    mRgba.copyTo(mLast);
-                                    DiffCount = 0;
-                                    NowState = 0;
-                                }
-                            }
-                            break;
-                        case 4:         //门已关闭
-                            if(TotalDiff==0){               //门关闭后，整个检测区域静态，确认门关闭完全
-                                LogStr = String.format(Locale.CHINA, "门关闭后，整个检测区域静态，确认门关闭完全4-6");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                NowState = 6;
-                            }
-                            else if(LtoR==0){               //检测到中间区域已经全部变化，可推测为开门或者干扰
-                                LogStr = String.format(Locale.CHINA, "关门尚未稳定又开门4-3");
-                                FileLogs.i(logtag,LogStr);
-                                DiffCount = 0;
-                                nGetPoint = 0;
-                                NowState = 3;
-                            }
-                            else{                           //未检测到关门运动，中间区域尚未变化，但非中间区域有变化，有干扰，累计帧数
-                                if((ComparePoint(mRgba, mLast)&9) == 0){
-                                    nGetPoint++;
-                                }
-                                DiffCount++;
-                            }
-                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                if(ifclose) {
-                                    if (DiffCount - nGetPoint<FrameNum/2) {            //按位与1001 得到0000，两个side点均匹配
-                                        LogStr = String.format(Locale.CHINA, "关门后有干扰，但是可以检测到Side静参点4-6");
-                                        FileLogs.i(logtag, LogStr);
-                                        mRgba.copyTo(mLast);
-                                        DiffCount = 0;
-                                        NowState = 6;
-                                    }
-                                    else {
-                                        LogStr = String.format(Locale.CHINA, "关门后有干扰，重置状态到初始");
-                                        FileLogs.i(logtag, LogStr);
-                                        mRgba.copyTo(mLast);
-                                        DiffCount = 0;
-                                        NowState = 0;
-                                    }
-                                }
-                                else {
-                                    LogStr = String.format(Locale.CHINA, "基准检测被干扰，重置状态到初始");
-                                    FileLogs.i(logtag, LogStr);
-                                    mRgba.copyTo(mLast);
-                                    DiffCount = 0;
-                                    NowState = 0;
-                                }
-                            }
-                            break;
-                        case 5:         //门已打开
-                            if(speedflag&&Lwidth>0&&Rwidth>0){          //检测到关门运动
-                                LogStr = String.format(Locale.CHINA, "关门运动5-2");
-                                FileLogs.i(logtag,LogStr);
-                                DiffCount = 0;
-                                NowState = 2;
-                            }
-                            else{                           //未检测到关门运动，中间区域尚未变化，但非中间区域有变化，有干扰，累计帧数
-                                DiffCount++;
-                            }
-                            if(DiffCount>FrameNum*3){       //累计超过一定数量则需要重新检测静态
-                                LogStr = String.format(Locale.CHINA, "首次静态有干扰，重置状态到初始1-0");
-                                FileLogs.i(logtag,LogStr);
-                                mRgba.copyTo(mLast);
-                                DiffCount = 0;
-                                NowState = 0;
-                            }
-                            break;
-                    }
-                    nProcNum++;//分离处理及同步避免空帧
-                    if(nProcNum>=(Integer.MAX_VALUE)) nProcNum = 10;//按每秒30帧算，Integer.MAX_VALUE=2147483647，折合828天半。超过这个运行时间，计数器归零(避免下标越界，归到10)，且不影响循环判断。
-                    nFrmSync = nFrmNum;//同步
+                while((nFrmSync==nFrmNum)&&runflag){//等待新的帧存入缓冲区
+                    Thread.sleep(1);
                 }
-                else {
-                    mRgba.copyTo(mLast);
-                    LogStr = "等待帧数据";
-                    Thread.sleep(10);
+                CompareFrame(mRgba);
+                if(Analy()^ifClosed){    //计算当前位置速度，判定是否与全局状态变量一致
+                    ifClosed = !ifClosed;           //不一致则切换全局状态变量
+                    SwitchLight(ifClosed);          //并将状态传递给光机
                 }
+                nFrmSync = nFrmNum;//同步
             }
             catch (InterruptedException e) {
                 e.printStackTrace();
@@ -524,7 +280,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         LogStr = "线程V退出";
         FileLogs.i(logtag,LogStr);
     }
-
+/*
     private byte ComparePoint(Mat MatA,Mat MatB){
         byte NowPoint[][][] = new byte[2][4][1];
         Imgproc.cvtColor(MatA, MatA, COLOR_BGR2GRAY);
@@ -539,11 +295,11 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         MatB.get(YOffset,swid/2+RMax-1,NowPoint[1][3]);
         byte result = 0;
         for(int i=0;i<4;i++){
-            if(NowPoint[0][i][0]!=NowPoint[1][i][0]) result += 2^i;
+            if(NowPoint[0][i][0]!=NowPoint[1][i][0]) result += Math.pow(2,i);
         }
         return result;
     }
-
+*/
     @Override
     public void onCameraViewStarted(int width, int height) {
         //初始化摄像头分辨率
@@ -658,17 +414,8 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     @Override
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         mRgba = inputFrame.rgba();//本方法内部不对帧进行重绘则可以省掉复制过程。
-        mRgba.copyTo(mFrame);
         if(nFrmNum>=(Integer.MAX_VALUE)) nFrmNum = 0;//按每秒30帧算，Integer.MAX_VALUE=2147483647，折合828天半。超过这个运行时间，计数器归零，且不影响循环判断。
-        if(!getclose) {
-            Imgproc.line(mFrame, new Point(swid / 2, YOffset), new Point(swid / 2, YOffset + SubMatHight), new Scalar(0, 0, 255), 2);
-            Imgproc.line(mFrame, new Point(swid * (MiddleValue - 1) / (MiddleValue * 2), YOffset + SubMatHight / 2), new Point(swid * (MiddleValue + 1) / (MiddleValue * 2), YOffset + SubMatHight / 2), new Scalar(255, 255, 0), 1);
-            if (ifclose) {
-                Imgproc.line(mFrame, new Point(swid / 2 - LMax, YOffset), new Point(swid / 2 - LMax, YOffset + SubMatHight), new Scalar(0, 255, 0), 1);
-                Imgproc.line(mFrame, new Point(swid / 2 + RMax - 1, YOffset), new Point(swid / 2 + RMax - 1, YOffset + SubMatHight), new Scalar(0, 255, 0), 1);
-            }
-        }
         nFrmNum++;
-        return mFrame;//此处必须返回与控件相同分辨率的mat，否则无法显示。
+        return mRgba;//此处必须返回与控件相同分辨率的mat，否则无法显示。
     }
 }
