@@ -24,11 +24,8 @@ import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
-import org.opencv.core.Point;
 import org.opencv.core.Rect;
-import org.opencv.core.Scalar;
 import org.opencv.core.Size;
-import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.imgproc.Imgproc;
 
 import java.util.ArrayList;
@@ -60,10 +57,10 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
 
     //以下全局变量
     private Mat mRgba,SubL,SubR;
-    private int swid,shei,nLR,nClose;
+    private int swid,shei,nClose;
     private int[][] LR= {{0,0,0},{0,0,0}};
 
-    private int nFrmNum,nFrmSync,CloseFrame;
+    private int nFrmNum,nFrmSync,nProcNum,CloseFrame;
     private boolean runflag,ifClosed;
 
     //以下IO类及变量
@@ -158,9 +155,8 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         mRgba = new Mat(shei, swid, CvType.CV_8UC4); //原始RGBA四通道图像（携带Alpha透明度信息的PNG图像）
         SubL = new Mat();
         SubR = new Mat();
-        nLR = 1;
         nClose = 0;
-        nFrmSync = 0;//初始化帧数计数器及同步计数器
+        nFrmNum = nFrmSync = nProcNum = 0;//初始化帧数计数器及同步计数器
         CloseFrame = 0;
         runflag = true;
         ifClosed = true;
@@ -169,7 +165,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private boolean SwitchLight(boolean ON_OFF){
         CmdResult = CmdExec.execCommand("cat /sys/class/leds/lcd-backlight/brightness",false);
         if(CmdResult.result>=0) {
-            if (CmdResult.successMsg.equals("0")^ON_OFF) OnOffScreen();
+            if ((!CmdResult.successMsg.equals("0"))^ON_OFF) OnOffScreen();
             return true;
         }
         else{
@@ -209,7 +205,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         return DiffOffset;
     }
 
-    private void CompareFrame(Mat NowMat){
+    private void CompareFrame(Mat NowMat,int NowFrame){
         Mat SubA;
         Mat SubB;
         int LDiff,RDiff;
@@ -220,46 +216,57 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         LDiff = DiffMat(SubA,SubL,true);
         RDiff = DiffMat(SubB,SubR,false);
         if(LDiff<swid/2){
-            LR[0][nLR%3] = LDiff;
+            LR[0][NowFrame%3] = LDiff;
             SubA.copyTo(SubL);
         }
         else{
-            LR[0][nLR%3] = LR[0][(nLR-1)%3];
+            LR[0][NowFrame%3] = LR[0][(NowFrame-1)%3];
         }
         if(RDiff<swid/2){
-            LR[1][nLR%3] = RDiff;
+            LR[1][NowFrame%3] = RDiff;
             SubB.copyTo(SubR);
         }
         else{
-            LR[1][nLR%3] = LR[0][(nLR-1)%3];
+            LR[1][NowFrame%3] = LR[0][(NowFrame-1)%3];
         }
-        nLR++;
-        if(nLR>=(Integer.MAX_VALUE)) nLR = 1;
         SubA.release();
         SubB.release();
     }
     private boolean Analy(int NowFrame){
         boolean result = ifClosed;
         int LO,RO,LS,RS;
-        LS = (LR[0][nLR%3]-LR[0][(nLR-2)%3])/2;
-        RS = (LR[1][nLR%3]-LR[1][(nLR-2)%3])/2;
+        if(NowFrame<2) return result;
+        LS = (LR[0][NowFrame%3]-LR[0][(NowFrame-2)%3])/2;
+        RS = (LR[1][NowFrame%3]-LR[1][(NowFrame-2)%3])/2;
         if(LS>OpenMin&&LS<OpenMax&&RS>OpenMin&&RS<OpenMax){
+            LogStr = String.format(Locale.CHINA, "检测到开门 LS=%d RS=%d", LS, RS);
+            FileLogs.i(logtag, LogStr);
             nClose = 0;
             result = false;
         }
         else if(LS<CloseMin&&LS>CloseMax&&RS<CloseMin&&RS>CloseMax){
+            LogStr = String.format(Locale.CHINA, "检测到关门 LS=%d RS=%d", LS, RS);
+            FileLogs.i(logtag, LogStr);
             CloseFrame = NowFrame;
             nClose++;
         }
         if(nClose>2){
-            LO = LR[0][nLR%3];
-            RO = LR[1][nLR%3];
+            LO = LR[0][NowFrame%3];
+            RO = LR[1][NowFrame%3];
+            LogStr = String.format(Locale.CHINA, "检测到连续关门 LS=%d RS=%d nClose=%d LO=%d RO=%d", LS, RS,nClose,LO,RO);
+            FileLogs.i(logtag, LogStr);
             if(LO==0&&RO==0&&LS==0&&RS==0){
+                LogStr = String.format(Locale.CHINA, "检测门已关 LS=%d RS=%d", LS, RS);
+                FileLogs.i(logtag, LogStr);
                 nClose = 0;
                 result = true;
             }
         }
-        if(nClose>0&&(NowFrame - CloseFrame)>FrameOut) nClose = 0;      //超时 关门中状态失效，nClose清零
+        if(nClose>0&&(NowFrame - CloseFrame)>FrameOut){      //超时 关门中状态失效，nClose清零
+            LogStr = String.format(Locale.CHINA, "检测到关门超时");
+            FileLogs.i(logtag, LogStr);
+            nClose = 0;
+        }
         return result;
     }
 
@@ -269,12 +276,29 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
                 while((nFrmSync==nFrmNum)&&runflag){//等待新的帧存入缓冲区
                     Thread.sleep(1);
                 }
-                CompareFrame(mRgba);
-                if(Analy(nFrmNum)^ifClosed){    //计算当前位置速度，判定是否与全局状态变量一致
+                if(nProcNum==0){
+                    LogStr = String.format(Locale.CHINA, "第一次运行，填充参考图");
+                    FileLogs.i(logtag, LogStr);
+                    Mat SubA;
+                    Mat SubB;
+                    SubA = mRgba.submat(new Rect(0,YOffset,swid/2,SubMatHight));
+                    SubB = mRgba.submat(new Rect(swid/2,YOffset,swid/2,SubMatHight));
+                    Imgproc.cvtColor(SubA,SubA,COLOR_BGR2GRAY);
+                    Imgproc.cvtColor(SubB,SubB,COLOR_BGR2GRAY);
+                    SubA.copyTo(SubL);
+                    SubB.copyTo(SubR);
+                    SubA.release();
+                    SubB.release();
+                }
+                else CompareFrame(mRgba,nProcNum);
+                if(Analy(nProcNum)^ifClosed){    //计算当前位置速度，判定是否与全局状态变量一致
                     ifClosed = !ifClosed;           //不一致则切换全局状态变量
                     SwitchLight(ifClosed);          //并将状态传递给光机
                 }
                 nFrmSync = nFrmNum;//同步
+                nProcNum++;
+                if(nProcNum>=(Integer.MAX_VALUE)) nProcNum = 0;//按每秒30帧算，Integer.MAX_VALUE=2147483647，折合828天半。超过这个运行时间，计数器归零，且不影响循环判断。
+
             }
             catch (InterruptedException e) {
                 e.printStackTrace();
