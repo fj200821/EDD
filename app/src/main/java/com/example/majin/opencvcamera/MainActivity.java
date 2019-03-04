@@ -53,7 +53,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private CameraBridgeViewBase mCVCamera;
 
     //以下为参数定义
-    private int YOffset,SubMatHight,OpenMin,OpenMax,CloseMin,CloseMax,FrameOut;
+    private int YOffset,SubMatHight,OpenMin,OpenMax,CloseMin,CloseMax,LRMin,FrameOut;
 
     //以下全局变量
     private Mat mRgba,SubL,SubR;
@@ -96,16 +96,16 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         // 无title
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        //requestWindowFeature(Window.FEATURE_NO_TITLE);
         // 全屏
-        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        //getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+        //        WindowManager.LayoutParams.FLAG_FULLSCREEN);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        createFloatView();
+        //createFloatView();
         FileLogs.init(this);
         //赋值摄像头对象
-        //mCVCamera = (CameraBridgeViewBase) findViewById(R.id.camera_view);
+        mCVCamera = findViewById(R.id.camera_view);
         mCVCamera.setCvCameraViewListener(this);
         // 打开USB摄像头 ID=0
         mCVCamera.setCameraIndex(-1);
@@ -150,6 +150,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         OpenMax = 100;
         CloseMin = -5;
         CloseMax = -100;
+        LRMin = 0;
         FrameOut = 50;
         
         mRgba = new Mat(shei, swid, CvType.CV_8UC4); //原始RGBA四通道图像（携带Alpha透明度信息的PNG图像）
@@ -165,10 +166,13 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
     private boolean SwitchLight(boolean ON_OFF){
         CmdResult = CmdExec.execCommand("cat /sys/class/leds/lcd-backlight/brightness",false);
         if(CmdResult.result>=0) {
-            if ((!CmdResult.successMsg.equals("0"))^ON_OFF) OnOffScreen();
+            //查询结果为true，表示光机亮度等于0，也就是关闭状态，如果ONOFF也是true，则表示光机需要打开发出切换指令。
+            //反之，查询结果为false标表示光机开启，如果ONOFF为false，表示需要关闭光机。也发出切换指令。两者不一致表示光机状态不需要切换。
+            if (CmdResult.successMsg.equals("0")==ON_OFF) OnOffScreen();
+            //无论是否发出指令，只要查询光机指令有正常返回值，则返回true
             return true;
         }
-        else{
+        else{//如果查询失败，则返回false，不发出任何针对光机的指令
             return false;
         }
     }
@@ -193,7 +197,7 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
         for (int i = 0; i < contours.size(); i++)
         {
             boundRect[i] = boundingRect(contours.get(i));
-            if(boundRect[i].height<SubMatHight/2) continue;
+            if(boundRect[i].height<SubMatHight/6) continue;
             if(ifL){
                 if(DiffOffset > swid/2-boundRect[i].x-boundRect[i].width) DiffOffset = swid/2-boundRect[i].x-boundRect[i].width;
             }
@@ -255,8 +259,8 @@ public class MainActivity extends Activity implements CameraBridgeViewBase.CvCam
             RO = LR[1][NowFrame%3];
             LogStr = String.format(Locale.CHINA, "检测到连续关门 LS=%d RS=%d nClose=%d LO=%d RO=%d", LS, RS,nClose,LO,RO);
             FileLogs.i(logtag, LogStr);
-            if(LO==0&&RO==0&&LS==0&&RS==0){
-                LogStr = String.format(Locale.CHINA, "检测门已关 LS=%d RS=%d", LS, RS);
+            if(LO<=OpenMin&&RO<=OpenMin&&LS==0&&RS==0){
+                LogStr = String.format(Locale.CHINA, "检测门已关 LS=%d RS=%d LO=%d RO=%d", LS, RS,LO,RO);
                 FileLogs.i(logtag, LogStr);
                 nClose = 0;
                 result = true;
